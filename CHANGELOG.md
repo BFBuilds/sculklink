@@ -11,6 +11,12 @@
 - `relay-updates` turns the card off; tracking continues, so switching it back on reports only the next change
 - NeoForge and Paper do not report their mods yet, so they post no update cards
 
+**Fixes**
+- Earning an advancement on Minecraft 26.3 crashed the server (`NoSuchMethodError: DisplayInfo.shouldAnnounceChat`):
+  26.3 made `DisplayInfo` a record and renamed its accessors. They are now looked up by name, newest first,
+  so one jar runs on 26.2 and 26.3, and any failure relaying an advancement is logged once instead of
+  being thrown into Minecraft's advancement code
+
 **Per-event channels**
 - `join-leave-webhook-url` sends join/leave cards to their own channel
 - `updates-webhook-url` does the same for update cards

@@ -15,3 +15,6 @@ run/
 
 # macOS
 .DS_Store
+
+# Minecraft classes run from the repo root (tests, harnesses) write their log here
+logs/

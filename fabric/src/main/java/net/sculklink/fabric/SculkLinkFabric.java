@@ -279,14 +279,41 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
 
     // ---- Called from the advancement mixin ----------------------------------------------------------
 
-    /** Invoked when a player completes an advancement that vanilla would announce in chat. */
+    /** Set once the version warning has been logged, so a busy server does not repeat it. */
+    private boolean advancementsWarned;
+
+    /**
+     * Invoked when a player completes an advancement that vanilla would announce in chat.
+     *
+     * <p>This runs inside Minecraft's own advancement code on the server thread, so anything it
+     * throws crashes the server. Relaying to Discord is never worth that: any failure here is
+     * logged once and the advancement simply is not posted.
+     */
     public void onAdvancement(ServerPlayer player, AdvancementHolder advancement) {
-        DisplayInfo display = advancement.value().display().orElse(null);
-        if (display == null || !display.shouldAnnounceChat()) {
+        try {
+            if (!AdvancementDisplay.supported()) {
+                warnAdvancementsOnce("this Minecraft version's advancement API is not recognised", null);
+                return;
+            }
+            DisplayInfo display = advancement.value().display().orElse(null);
+            if (display == null || !AdvancementDisplay.announceToChat(display)) {
+                return;
+            }
+            core.advancementEarned(player.getScoreboardName(), player.getUUID().toString(),
+                    verbFor(AdvancementDisplay.type(display)), AdvancementDisplay.title(display).getString());
+        } catch (VirtualMachineError e) {
+            throw e; // out of memory and the like are not this mod's to swallow
+        } catch (Throwable t) {
+            warnAdvancementsOnce("relaying one failed", t);
+        }
+    }
+
+    private void warnAdvancementsOnce(String why, Throwable t) {
+        if (advancementsWarned) {
             return;
         }
-        core.advancementEarned(player.getScoreboardName(), player.getUUID().toString(),
-                verbFor(display.getType()), display.getTitle().getString());
+        advancementsWarned = true;
+        SculkLinkCore.LOGGER.warn("Advancements will not be posted to Discord: {}", why, t);
     }
 
     /** Matches vanilla's own phrasing for each advancement frame type. */
