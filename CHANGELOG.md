@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0
+
+**Update cards** (Fabric)
+- On each start, the game version and installed mods are compared with the last start, and a card
+  lists what was added, updated or removed, so players hear about an update without anyone posting it
+- Only top-level mods count: jar-in-jar libraries and Minecraft/Java themselves are left out
+- The last start is kept in `sculklink-installed.json` beside the config; a first start only records
+  a baseline, so installing the mod does not announce every mod as new
+- `relay-updates` turns the card off; tracking continues, so switching it back on reports only the next change
+- NeoForge and Paper do not report their mods yet, so they post no update cards
+
+**Per-event channels**
+- `join-leave-webhook-url` sends join/leave cards to their own channel
+- `updates-webhook-url` does the same for update cards
+- Both default to blank, which keeps everything on `webhook-url` as before
+
 ## 1.0.0
 
 First release. Two-way Discord bridge for Minecraft 26.2 on **Fabric, NeoForge and Paper**.

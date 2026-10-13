@@ -7,9 +7,9 @@ appear in in-game chat. Server-side only — players need no mods.
 
 | Platform | Jar | Drop it in | Notes |
 |---|---|---|---|
-| Fabric | `sculklink-fabric-1.0.0.jar` | `mods/` | Needs Fabric API |
-| NeoForge | `sculklink-neoforge-1.0.0.jar` | `mods/` | Dedicated servers only |
-| Paper | `sculklink-paper-1.0.0.jar` | `plugins/` | Also Purpur, Pufferfish and other forks |
+| Fabric | `sculklink-fabric-1.1.0.jar` | `mods/` | Needs Fabric API |
+| NeoForge | `sculklink-neoforge-1.1.0.jar` | `mods/` | Dedicated servers only |
+| Paper | `sculklink-paper-1.1.0.jar` | `plugins/` | Also Purpur, Pufferfish and other forks |
 
 Minecraft **26.2+** · Java **25+** · MIT · **no external dependencies**
 
@@ -129,6 +129,9 @@ Uses a shutdown hook, so it catches OOM kills too, not just logged exceptions.
 | `relay-deaths` | `true` | Uses the game's own wording. |
 | `relay-advancements` | `true` | Only ones vanilla announces in chat. |
 | `relay-server-status` | `true` | Online / shutting down. |
+| `join-leave-webhook-url` | `""` | Own webhook for join/leave cards, e.g. a who's-online channel. Blank = `webhook-url`. |
+| `relay-updates` | `true` | Card when the game version or mods changed since the last start. Fabric only. |
+| `updates-webhook-url` | `""` | Own webhook for update cards. Blank = `webhook-url`. |
 | `relay-crashes` | `true` | Unclean exits. |
 | `relay-mentions` | `true` | `@name` → real Discord ping. |
 | `server-name` | `"Minecraft Server"` | Name on event embeds. |

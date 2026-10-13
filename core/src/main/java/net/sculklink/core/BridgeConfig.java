@@ -67,6 +67,24 @@ public final class BridgeConfig {
     @SerializedName("relay-server-status")
     public boolean relayServerStatus = true;
 
+    /**
+     * Webhook for join/leave cards alone, e.g. a dedicated "who's online" channel. Blank keeps
+     * them with everything else on {@code webhook-url}; set, they go only here.
+     */
+    @SerializedName("join-leave-webhook-url")
+    public String joinLeaveWebhookUrl = "";
+
+    /**
+     * Post a card when the game version or the installed mods changed since the last start, so
+     * players hear about an update without anyone remembering to announce it.
+     */
+    @SerializedName("relay-updates")
+    public boolean relayUpdates = true;
+
+    /** Webhook for those update cards alone. Blank keeps them on {@code webhook-url}. */
+    @SerializedName("updates-webhook-url")
+    public String updatesWebhookUrl = "";
+
     // ---- Presentation --------------------------------------------------------------------
 
     /** Name shown on the status/death/advancement embeds. */
@@ -187,6 +205,16 @@ public final class BridgeConfig {
 
     public boolean inboundEnabled() {
         return discordToMinecraft && !botToken.isBlank() && !channelId.isBlank();
+    }
+
+    /** Where join/leave cards go: their own webhook if set, otherwise the main one. */
+    public String joinLeaveWebhook() {
+        return joinLeaveWebhookUrl.isBlank() ? webhookUrl : joinLeaveWebhookUrl;
+    }
+
+    /** Where update cards go: their own webhook if set, otherwise the main one. */
+    public String updatesWebhook() {
+        return updatesWebhookUrl.isBlank() ? webhookUrl : updatesWebhookUrl;
     }
 
     // ---- Load / save ---------------------------------------------------------------------

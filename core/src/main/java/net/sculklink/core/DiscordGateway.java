@@ -506,7 +506,7 @@ public final class DiscordGateway {
                 .uri(URI.create("https://discord.com/api/v10/guilds/" + gid + "/roles"))
                 .timeout(Duration.ofSeconds(15))
                 .header("Authorization", "Bot " + config.botToken)
-                .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.0.0)")
+                .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.1.0)")
                 .GET()
                 .build();
 
@@ -560,7 +560,7 @@ public final class DiscordGateway {
                 .timeout(Duration.ofSeconds(15))
                 .header("Authorization", "Bot " + config.botToken)
                 .header("Content-Type", "application/json")
-                .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.0.0)")
+                .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.1.0)")
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(),
                         java.nio.charset.StandardCharsets.UTF_8))
                 .build();

@@ -9,6 +9,8 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.loader.api.ModContainer;
+import net.fabricmc.loader.api.metadata.ModMetadata;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementType;
 import net.minecraft.advancements.DisplayInfo;
@@ -21,7 +23,9 @@ import net.minecraft.server.players.NameAndId;
 import net.minecraft.server.players.UserWhiteListEntry;
 
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -155,6 +159,28 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
             SculkLinkCore.LOGGER.warn("Could not update whitelist for {}: {}", playerName, e.getMessage());
             return false;
         }
+    }
+
+    @Override
+    public String gameVersion() {
+        return FabricLoader.getInstance().getModContainer("minecraft")
+                .map(mod -> mod.getMetadata().getVersion().getFriendlyString())
+                .orElse(null);
+    }
+
+    @Override
+    public Map<String, InstalledMod> installedMods() {
+        Map<String, InstalledMod> mods = new HashMap<>();
+        for (ModContainer mod : FabricLoader.getInstance().getAllMods()) {
+            ModMetadata meta = mod.getMetadata();
+            // Jar-in-jar libraries come and go with their parent, and "builtin" is Minecraft and
+            // Java themselves. Fabric Loader stays in: a loader bump is a real server update.
+            if (mod.getContainingMod().isPresent() || "builtin".equals(meta.getType())) {
+                continue;
+            }
+            mods.put(meta.getId(), new InstalledMod(meta.getName(), meta.getVersion().getFriendlyString()));
+        }
+        return mods;
     }
 
     @Override

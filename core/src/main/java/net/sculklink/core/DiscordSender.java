@@ -35,6 +35,10 @@ public final class DiscordSender {
     private static final int COLOR_DEATH = 0x992D22;
     private static final int COLOR_ADVANCEMENT = 0xFAA61A;
     private static final int COLOR_STOP = 0x747F8D;
+    private static final int COLOR_UPDATE = 0x5865F2;
+
+    /** Discord's cap on an embed description. */
+    private static final int EMBED_DESCRIPTION_LIMIT = 4096;
 
     /** {@code @name} typed in Minecraft. Discord names are alphanumeric plus _ and . */
     private static final Pattern MENTION = Pattern.compile("@([A-Za-z0-9_.]{2,32})");
@@ -107,11 +111,13 @@ public final class DiscordSender {
     }
 
     public void sendJoin(String playerName, String uuid) {
-        sendPlayerEmbed("**" + escapeMarkdown(playerName) + "** joined the server", COLOR_JOIN, playerName, uuid);
+        sendPlayerEmbed("**" + escapeMarkdown(playerName) + "** joined the server", COLOR_JOIN, playerName, uuid,
+                config.joinLeaveWebhook());
     }
 
     public void sendLeave(String playerName, String uuid) {
-        sendPlayerEmbed("**" + escapeMarkdown(playerName) + "** left the server", COLOR_LEAVE, playerName, uuid);
+        sendPlayerEmbed("**" + escapeMarkdown(playerName) + "** left the server", COLOR_LEAVE, playerName, uuid,
+                config.joinLeaveWebhook());
     }
 
     /**
@@ -134,6 +140,20 @@ public final class DiscordSender {
 
     public void sendServerStopping() {
         sendServerEmbed("⛔ Server is **shutting down**", COLOR_STOP);
+    }
+
+    /** What changed since the last start, already rendered by {@link UpdateTracker}. */
+    public void sendUpdate(String description) {
+        JsonObject payload = base(config.serverName, null);
+
+        JsonObject embed = new JsonObject();
+        embed.addProperty("description", truncate(description, EMBED_DESCRIPTION_LIMIT));
+        embed.addProperty("color", COLOR_UPDATE);
+
+        JsonArray embeds = new JsonArray();
+        embeds.add(embed);
+        payload.add("embeds", embeds);
+        enqueue(payload, config.updatesWebhook());
     }
 
     /**
@@ -167,7 +187,7 @@ public final class DiscordSender {
                     .uri(URI.create(config.webhookUrl))
                     .timeout(Duration.ofSeconds(4))
                     .header("Content-Type", "application/json")
-                    .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.0.0)")
+                    .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.1.0)")
                     .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
                     .build();
             http.send(request, HttpResponse.BodyHandlers.discarding());
@@ -196,6 +216,10 @@ public final class DiscordSender {
     // ---- Payload construction -------------------------------------------------------------
 
     private void sendPlayerEmbed(String description, int color, String playerName, String uuid) {
+        sendPlayerEmbed(description, color, playerName, uuid, config.webhookUrl);
+    }
+
+    private void sendPlayerEmbed(String description, int color, String playerName, String uuid, String webhook) {
         JsonObject payload = base(config.serverName, null);
 
         JsonObject embed = new JsonObject();
@@ -213,7 +237,7 @@ public final class DiscordSender {
         JsonArray embeds = new JsonArray();
         embeds.add(embed);
         payload.add("embeds", embeds);
-        enqueue(payload);
+        enqueue(payload, webhook);
     }
 
     private void sendServerEmbed(String description, int color) {
@@ -262,26 +286,31 @@ public final class DiscordSender {
     // ---- Delivery (sender thread) ---------------------------------------------------------
 
     private void enqueue(JsonObject payload) {
-        if (!config.outboundEnabled()) {
+        enqueue(payload, config.webhookUrl);
+    }
+
+    /** Posts to a specific webhook; join/leave and update cards may have their own channel. */
+    private void enqueue(JsonObject payload, String webhook) {
+        if (webhook == null || webhook.isBlank()) {
             return;
         }
         try {
-            queue.execute(() -> post(payload.toString()));
+            queue.execute(() -> post(webhook, payload.toString()));
         } catch (java.util.concurrent.RejectedExecutionException e) {
             // Server is already shutting down and the queue is closed. Nothing to do.
         }
     }
 
-    private void post(String body) {
+    private void post(String webhook, String body) {
         // Discord answers 429 with how long to wait; three tries covers a burst without
         // letting a wedged channel back up the queue forever.
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
                 HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(config.webhookUrl))
+                        .uri(URI.create(webhook))
                         .timeout(Duration.ofSeconds(15))
                         .header("Content-Type", "application/json")
-                        .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.0.0)")
+                        .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.1.0)")
                         .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                         .build();
 

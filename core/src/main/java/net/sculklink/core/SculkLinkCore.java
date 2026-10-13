@@ -137,7 +137,24 @@ public final class SculkLinkCore {
         if (config.relayServerStatus) {
             sender.sendServerStarted();
         }
+        announceUpdates();
         updatePresence(null, null);
+    }
+
+    /**
+     * Posts what changed since the last start. Tracked even while {@code relay-updates} is off,
+     * so switching it on later reports only the next change, not everything since install.
+     */
+    private void announceUpdates() {
+        String gameVersion = platform.gameVersion();
+        Map<String, BridgePlatform.InstalledMod> mods = platform.installedMods();
+        if (gameVersion == null && mods.isEmpty()) {
+            return; // this platform cannot say what it is running
+        }
+        String changes = UpdateTracker.check(platform.configDir(), gameVersion, mods);
+        if (changes != null && config.relayUpdates) {
+            sender.sendUpdate(changes);
+        }
     }
 
     /** Call at the start of a clean shutdown. */

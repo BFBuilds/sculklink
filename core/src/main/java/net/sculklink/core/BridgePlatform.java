@@ -2,6 +2,7 @@ package net.sculklink.core;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Everything the bridge needs from the server it is running on.
@@ -59,5 +60,23 @@ public interface BridgePlatform {
     /** Recent ticks per second, or a negative value if the platform does not expose it. */
     default double tps() {
         return -1;
+    }
+
+    /** Game version, e.g. {@code 26.3}, for update cards. {@code null} if unknown. */
+    default String gameVersion() {
+        return null;
+    }
+
+    /**
+     * What the operator installed, keyed by mod or plugin id, for update cards. Libraries bundled
+     * inside another jar and the platform's own built-ins are left out — otherwise one Fabric API
+     * bump would list dozens of modules nobody installed by hand. Empty if unsupported.
+     */
+    default Map<String, InstalledMod> installedMods() {
+        return Map.of();
+    }
+
+    /** One installed mod or plugin, as an update card shows it. */
+    record InstalledMod(String name, String version) {
     }
 }
