@@ -31,7 +31,9 @@ import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -227,16 +229,41 @@ public final class SculkLinkNeoForge implements BridgePlatform {
         if (!(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
-        AdvancementHolder advancement = event.getAdvancement();
-        DisplayInfo display = advancement.value().display().orElse(null);
-        // Recipe and hidden advancements are not announced in chat; matching vanilla here is
-        // what stops Discord filling up with every recipe unlock.
-        if (display == null || !display.shouldAnnounceChat()) {
-            return;
+        // NeoForge's event bus rethrows a handler's exception into the advancement code on the
+        // server thread, so a failure here would crash the server (as 26.3's renamed DisplayInfo
+        // accessors did). Relaying to Discord is never worth that.
+        try {
+            if (!AdvancementDisplay.supported()) {
+                if (!advancementsUnsupportedWarned) {
+                    advancementsUnsupportedWarned = true;
+                    SculkLinkCore.LOGGER.warn("Advancements will not be posted to Discord: "
+                            + "this Minecraft version's advancement API is not recognised");
+                }
+                return;
+            }
+            AdvancementHolder advancement = event.getAdvancement();
+            DisplayInfo display = advancement.value().display().orElse(null);
+            // Recipe and hidden advancements are not announced in chat; matching vanilla here is
+            // what stops Discord filling up with every recipe unlock.
+            if (display == null || !AdvancementDisplay.announceToChat(display)) {
+                return;
+            }
+            core.advancementEarned(player.getScoreboardName(), player.getUUID().toString(),
+                    verbFor(AdvancementDisplay.type(display)), AdvancementDisplay.title(display).getString());
+        } catch (VirtualMachineError e) {
+            throw e; // out of memory and the like are not this mod's to swallow
+        } catch (Throwable t) {
+            if (advancementFailuresLogged.add(t.getClass())) {
+                SculkLinkCore.LOGGER.warn("An advancement could not be posted to Discord "
+                        + "(further {} failures are not logged)", t.getClass().getSimpleName(), t);
+            }
         }
-        core.advancementEarned(player.getScoreboardName(), player.getUUID().toString(),
-                verbFor(display.getType()), display.getTitle().getString());
     }
+
+    /** Set once the unsupported-version warning has been logged; it would otherwise repeat on every advancement. */
+    private boolean advancementsUnsupportedWarned;
+    /** Kinds of relay failure already logged. Each kind is logged once, so a busy server's log stays readable. */
+    private final Set<Class<?>> advancementFailuresLogged = new HashSet<>();
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {

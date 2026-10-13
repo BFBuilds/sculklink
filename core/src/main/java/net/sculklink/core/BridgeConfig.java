@@ -6,11 +6,15 @@ import com.google.gson.JsonSyntaxException;
 import com.google.gson.annotations.SerializedName;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Everything the operator can tune, read from {@code config/sculklink.json}.
@@ -69,19 +73,23 @@ public final class BridgeConfig {
 
     /**
      * Webhook for join/leave cards alone, e.g. a dedicated "who's online" channel. Blank keeps
-     * them with everything else on {@code webhook-url}; set, they go only here.
+     * them with everything else on {@code webhook-url}; set, they go only here. Like every
+     * outbound post, they stop while {@code webhook-url} is blank.
      */
     @SerializedName("join-leave-webhook-url")
     public String joinLeaveWebhookUrl = "";
 
     /**
      * Post a card when the game version or the installed mods changed since the last start, so
-     * players hear about an update without anyone remembering to announce it.
+     * players hear about an update without anyone remembering to announce it. On by default.
      */
     @SerializedName("relay-updates")
     public boolean relayUpdates = true;
 
-    /** Webhook for those update cards alone. Blank keeps them on {@code webhook-url}. */
+    /**
+     * Webhook for those update cards alone. Blank keeps them on {@code webhook-url}; they too
+     * stop while {@code webhook-url} is blank.
+     */
     @SerializedName("updates-webhook-url")
     public String updatesWebhookUrl = "";
 
@@ -207,14 +215,79 @@ public final class BridgeConfig {
         return discordToMinecraft && !botToken.isBlank() && !channelId.isBlank();
     }
 
+    /** The main webhook, or blank when it is unset or failed validation at load. */
+    public String mainWebhook() {
+        return usable("webhook-url", webhookUrl);
+    }
+
     /** Where join/leave cards go: their own webhook if set, otherwise the main one. */
     public String joinLeaveWebhook() {
-        return joinLeaveWebhookUrl.isBlank() ? webhookUrl : joinLeaveWebhookUrl;
+        return route("join-leave-webhook-url", joinLeaveWebhookUrl);
     }
 
     /** Where update cards go: their own webhook if set, otherwise the main one. */
     public String updatesWebhook() {
-        return updatesWebhookUrl.isBlank() ? webhookUrl : updatesWebhookUrl;
+        return route("updates-webhook-url", updatesWebhookUrl);
+    }
+
+    private String route(String key, String url) {
+        if (!outboundEnabled()) {
+            return ""; // a blank webhook-url switches every outbound post off, extra channels too
+        }
+        return url.isBlank() ? mainWebhook() : usable(key, url);
+    }
+
+    private String usable(String key, String url) {
+        return badWebhooks.contains(key) ? "" : url;
+    }
+
+    /** Config keys whose URL could not be parsed. Their posts are dropped, never retried. */
+    private transient Set<String> badWebhooks = new HashSet<>();
+
+    /**
+     * Repairs what a hand-edited file gets wrong before anything reads it: an explicit
+     * {@code null} (Gson stores it as a null field, which every {@code isBlank()} would throw on)
+     * and stray whitespace from a paste, which makes the URL unparseable.
+     */
+    private void normalise() {
+        webhookUrl = clean(webhookUrl);
+        joinLeaveWebhookUrl = clean(joinLeaveWebhookUrl);
+        updatesWebhookUrl = clean(updatesWebhookUrl);
+        if (badWebhooks == null) {
+            badWebhooks = new HashSet<>();
+        }
+    }
+
+    /**
+     * Reports an unusable webhook once, by key. The URL itself is never logged: it carries the
+     * webhook's token. The file keeps the operator's value so the typo can be seen and fixed.
+     */
+    private void checkWebhooks() {
+        checkWebhook("webhook-url", webhookUrl);
+        checkWebhook("join-leave-webhook-url", joinLeaveWebhookUrl);
+        checkWebhook("updates-webhook-url", updatesWebhookUrl);
+    }
+
+    private void checkWebhook(String key, String url) {
+        if (url.isBlank() || isHttpUrl(url)) {
+            return;
+        }
+        badWebhooks.add(key);
+        SculkLinkCore.LOGGER.error("`{}` is not a valid webhook URL; posts that use it are skipped until it is fixed", key);
+    }
+
+    private static String clean(String value) {
+        return value == null ? "" : value.strip();
+    }
+
+    private static boolean isHttpUrl(String url) {
+        try {
+            URI uri = new URI(url);
+            String scheme = uri.getScheme();
+            return ("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme)) && uri.getHost() != null;
+        } catch (URISyntaxException e) {
+            return false;
+        }
     }
 
     // ---- Load / save ---------------------------------------------------------------------
@@ -252,6 +325,8 @@ public final class BridgeConfig {
 
         // Gson builds a fresh instance when parsing, so the path is attached afterwards rather
         // than in the constructor.
+        config.normalise();
+        config.checkWebhooks();
         config.path = path;
         config.save();
         return config;

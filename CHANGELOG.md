@@ -5,22 +5,30 @@
 **Update cards** (Fabric)
 - On each start, the game version and installed mods are compared with the last start, and a card
   lists what was added, updated or removed, so players hear about an update without anyone posting it
+- **On by default** (`relay-updates`). Turning it off stops the cards but not the tracking, so switching
+  it back on reports only the next change
 - Only top-level mods count: jar-in-jar libraries and Minecraft/Java themselves are left out
-- The last start is kept in `sculklink-installed.json` beside the config; a first start only records
-  a baseline, so installing the mod does not announce every mod as new
-- `relay-updates` turns the card off; tracking continues, so switching it back on reports only the next change
+- The last start is kept in `sculklink-installed.json` beside the config. A first start only records
+  a baseline, so installing the mod does not announce every mod as new. A damaged file is replaced
+  by a fresh baseline, and a failed update check is logged without stopping the server
+- A card too long for one Discord embed is split across several, never cut off
 - NeoForge and Paper do not report their mods yet, so they post no update cards
-
-**Fixes**
-- Earning an advancement on Minecraft 26.3 crashed the server (`NoSuchMethodError: DisplayInfo.shouldAnnounceChat`):
-  26.3 made `DisplayInfo` a record and renamed its accessors. They are now looked up by name, newest first,
-  so one jar runs on 26.2 and 26.3, and any failure relaying an advancement is logged once instead of
-  being thrown into Minecraft's advancement code
 
 **Per-event channels**
 - `join-leave-webhook-url` sends join/leave cards to their own channel
 - `updates-webhook-url` does the same for update cards
-- Both default to blank, which keeps everything on `webhook-url` as before
+- Both default to blank, which keeps everything on `webhook-url` as before. A blank `webhook-url`
+  still switches every post off, these included
+
+**Fixes**
+- Earning an advancement on Minecraft 26.3 crashed the server (`NoSuchMethodError: DisplayInfo.shouldAnnounceChat`),
+  on Fabric and NeoForge: 26.3 made `DisplayInfo` a record and renamed its accessors. They are now looked
+  up by name, newest first, so one jar runs on 26.2 and 26.3, and a failure relaying an advancement is
+  logged instead of being thrown into Minecraft's advancement code
+- Webhook URLs are trimmed, and an explicit `null` is read as blank. A URL that cannot be parsed is
+  reported once by its config key and skipped; it is no longer retried, and never written to the log,
+  where it would expose the webhook's token
+- A post that still fails after three tries is now logged
 
 ## 1.0.0
 

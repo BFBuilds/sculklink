@@ -24,8 +24,10 @@ import net.minecraft.server.players.UserWhiteListEntry;
 
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -279,8 +281,10 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
 
     // ---- Called from the advancement mixin ----------------------------------------------------------
 
-    /** Set once the version warning has been logged, so a busy server does not repeat it. */
-    private boolean advancementsWarned;
+    /** Set once the unsupported-version warning has been logged; it would otherwise repeat on every advancement. */
+    private boolean advancementsUnsupportedWarned;
+    /** Kinds of relay failure already logged. Each kind is logged once, so a busy server's log stays readable. */
+    private final Set<Class<?>> advancementFailuresLogged = new HashSet<>();
 
     /**
      * Invoked when a player completes an advancement that vanilla would announce in chat.
@@ -292,7 +296,11 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
     public void onAdvancement(ServerPlayer player, AdvancementHolder advancement) {
         try {
             if (!AdvancementDisplay.supported()) {
-                warnAdvancementsOnce("this Minecraft version's advancement API is not recognised", null);
+                if (!advancementsUnsupportedWarned) {
+                    advancementsUnsupportedWarned = true;
+                    SculkLinkCore.LOGGER.warn("Advancements will not be posted to Discord: "
+                            + "this Minecraft version's advancement API is not recognised");
+                }
                 return;
             }
             DisplayInfo display = advancement.value().display().orElse(null);
@@ -304,16 +312,11 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
         } catch (VirtualMachineError e) {
             throw e; // out of memory and the like are not this mod's to swallow
         } catch (Throwable t) {
-            warnAdvancementsOnce("relaying one failed", t);
+            if (advancementFailuresLogged.add(t.getClass())) {
+                SculkLinkCore.LOGGER.warn("An advancement could not be posted to Discord "
+                        + "(further {} failures are not logged)", t.getClass().getSimpleName(), t);
+            }
         }
-    }
-
-    private void warnAdvancementsOnce(String why, Throwable t) {
-        if (advancementsWarned) {
-            return;
-        }
-        advancementsWarned = true;
-        SculkLinkCore.LOGGER.warn("Advancements will not be posted to Discord: {}", why, t);
     }
 
     /** Matches vanilla's own phrasing for each advancement frame type. */

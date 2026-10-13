@@ -142,18 +142,66 @@ public final class DiscordSender {
         sendServerEmbed("⛔ Server is **shutting down**", COLOR_STOP);
     }
 
-    /** What changed since the last start, already rendered by {@link UpdateTracker}. */
+    /**
+     * What changed since the last start, already rendered by {@link UpdateTracker}. A big update
+     * — a version bump across a large pack — can outgrow one embed, so it is split at line breaks
+     * into as many cards as it needs rather than cut off: the saved state has already moved on,
+     * so anything dropped here would never be reported.
+     */
     public void sendUpdate(String description) {
-        JsonObject payload = base(config.serverName, null);
+        for (String part : splitAtLines(description, EMBED_DESCRIPTION_LIMIT)) {
+            JsonObject payload = base(config.serverName, null);
 
-        JsonObject embed = new JsonObject();
-        embed.addProperty("description", truncate(description, EMBED_DESCRIPTION_LIMIT));
-        embed.addProperty("color", COLOR_UPDATE);
+            JsonObject embed = new JsonObject();
+            embed.addProperty("description", part);
+            embed.addProperty("color", COLOR_UPDATE);
 
-        JsonArray embeds = new JsonArray();
-        embeds.add(embed);
-        payload.add("embeds", embeds);
-        enqueue(payload, config.updatesWebhook());
+            JsonArray embeds = new JsonArray();
+            embeds.add(embed);
+            payload.add("embeds", embeds);
+            enqueue(payload, config.updatesWebhook());
+        }
+    }
+
+    /**
+     * Chunks of at most {@code limit} characters, broken between lines wherever possible. A line
+     * longer than a whole chunk is itself split, never cut, since whatever is cut is lost for good.
+     */
+    static List<String> splitAtLines(String text, int limit) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String line : text.split("\n", -1)) {
+            for (String piece : splitLongLine(line, limit)) {
+                if (current.length() > 0 && current.length() + 1 + piece.length() > limit) {
+                    parts.add(current.toString());
+                    current.setLength(0);
+                }
+                if (current.length() > 0) {
+                    current.append('\n');
+                }
+                current.append(piece);
+            }
+        }
+        if (!current.toString().isBlank()) {
+            parts.add(current.toString());
+        }
+        return parts;
+    }
+
+    /** The line in pieces of at most {@code limit} characters, never splitting a surrogate pair. */
+    private static List<String> splitLongLine(String line, int limit) {
+        List<String> pieces = new ArrayList<>();
+        int start = 0;
+        while (line.length() - start > limit) {
+            int end = start + limit;
+            if (Character.isLowSurrogate(line.charAt(end))) {
+                end--; // keep an emoji's two halves together
+            }
+            pieces.add(line.substring(start, end));
+            start = end;
+        }
+        pieces.add(line.substring(start));
+        return pieces;
     }
 
     /**
@@ -174,7 +222,8 @@ public final class DiscordSender {
         embeds.add(embed);
         payload.add("embeds", embeds);
 
-        if (!config.outboundEnabled()) {
+        String webhook = config.mainWebhook();
+        if (webhook.isBlank()) {
             return;
         }
 
@@ -184,7 +233,7 @@ public final class DiscordSender {
         // supervisor to SIGKILL us anyway.
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(config.webhookUrl))
+                    .uri(URI.create(webhook))
                     .timeout(Duration.ofSeconds(4))
                     .header("Content-Type", "application/json")
                     .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.1.0)")
@@ -216,7 +265,7 @@ public final class DiscordSender {
     // ---- Payload construction -------------------------------------------------------------
 
     private void sendPlayerEmbed(String description, int color, String playerName, String uuid) {
-        sendPlayerEmbed(description, color, playerName, uuid, config.webhookUrl);
+        sendPlayerEmbed(description, color, playerName, uuid, config.mainWebhook());
     }
 
     private void sendPlayerEmbed(String description, int color, String playerName, String uuid, String webhook) {
@@ -286,7 +335,7 @@ public final class DiscordSender {
     // ---- Delivery (sender thread) ---------------------------------------------------------
 
     private void enqueue(JsonObject payload) {
-        enqueue(payload, config.webhookUrl);
+        enqueue(payload, config.mainWebhook());
     }
 
     /** Posts to a specific webhook; join/leave and update cards may have their own channel. */
@@ -341,6 +390,11 @@ public final class DiscordSender {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } catch (IllegalArgumentException e) {
+                // An unparseable URL. Config loading screens these out, so this is a backstop:
+                // retrying cannot help, and the message would print the URL and its token.
+                SculkLinkCore.LOGGER.error("A webhook URL could not be used; dropping the post");
+                return;
             } catch (Exception e) {
                 SculkLinkCore.LOGGER.warn("Failed to reach Discord ({}), attempt {}/3", e.getMessage(), attempt + 1);
                 try {
@@ -351,6 +405,7 @@ public final class DiscordSender {
                 }
             }
         }
+        SculkLinkCore.LOGGER.warn("Gave up posting to Discord after 3 attempts; that message is lost");
     }
 
     private static long retryAfterMillis(String body) {

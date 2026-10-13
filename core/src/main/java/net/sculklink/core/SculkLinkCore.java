@@ -144,16 +144,23 @@ public final class SculkLinkCore {
     /**
      * Posts what changed since the last start. Tracked even while {@code relay-updates} is off,
      * so switching it on later reports only the next change, not everything since install.
+     *
+     * <p>Runs inside the server's own startup, where an exception counts as a server crash — and
+     * the state file behind it would crash every start after. An update card is never worth that.
      */
     private void announceUpdates() {
-        String gameVersion = platform.gameVersion();
-        Map<String, BridgePlatform.InstalledMod> mods = platform.installedMods();
-        if (gameVersion == null && mods.isEmpty()) {
-            return; // this platform cannot say what it is running
-        }
-        String changes = UpdateTracker.check(platform.configDir(), gameVersion, mods);
-        if (changes != null && config.relayUpdates) {
-            sender.sendUpdate(changes);
+        try {
+            String gameVersion = platform.gameVersion();
+            Map<String, BridgePlatform.InstalledMod> mods = platform.installedMods();
+            if (gameVersion == null && mods.isEmpty()) {
+                return; // this platform cannot say what it is running
+            }
+            String changes = UpdateTracker.check(platform.configDir(), gameVersion, mods);
+            if (changes != null && config.relayUpdates) {
+                sender.sendUpdate(changes);
+            }
+        } catch (RuntimeException e) {
+            LOGGER.error("Could not check for server updates; no update card this start", e);
         }
     }
 

@@ -129,7 +129,7 @@ Uses a shutdown hook, so it catches OOM kills too, not just logged exceptions.
 | `relay-deaths` | `true` | Uses the game's own wording. |
 | `relay-advancements` | `true` | Only ones vanilla announces in chat. |
 | `relay-server-status` | `true` | Online / shutting down. |
-| `join-leave-webhook-url` | `""` | Own webhook for join/leave cards, e.g. a who's-online channel. Blank = `webhook-url`. |
+| `join-leave-webhook-url` | `""` | Own webhook for join/leave cards, e.g. a who's-online channel. Blank = `webhook-url`. Off while `webhook-url` is blank. |
 | `relay-updates` | `true` | Card when the game version or mods changed since the last start. Fabric only. |
 | `updates-webhook-url` | `""` | Own webhook for update cards. Blank = `webhook-url`. |
 | `relay-crashes` | `true` | Unclean exits. |
