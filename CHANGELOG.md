@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- `deaths-webhook-url` sends death cards to their own channel, e.g. a public one while joins,
+  advancements and server status stay private. Blank keeps them on `webhook-url` as before, and a
+  blank `webhook-url` still switches every post off, this one included
+
 ## 1.1.0
 
 **Update cards** (Fabric)

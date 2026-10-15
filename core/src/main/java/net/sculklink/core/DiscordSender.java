@@ -125,7 +125,8 @@ public final class DiscordSender {
      * carries the same wording players saw in chat.
      */
     public void sendDeath(String deathMessage, String playerName, String uuid) {
-        sendPlayerEmbed("💀 " + escapeMarkdown(deathMessage), COLOR_DEATH, playerName, uuid);
+        sendPlayerEmbed("💀 " + escapeMarkdown(deathMessage), COLOR_DEATH, playerName, uuid,
+                config.deathsWebhook());
     }
 
     public void sendAdvancement(String playerName, String uuid, String kind, String title) {
@@ -338,7 +339,7 @@ public final class DiscordSender {
         enqueue(payload, config.mainWebhook());
     }
 
-    /** Posts to a specific webhook; join/leave and update cards may have their own channel. */
+    /** Posts to a specific webhook; join/leave, death and update cards may have their own channel. */
     private void enqueue(JsonObject payload, String webhook) {
         if (webhook == null || webhook.isBlank()) {
             return;

@@ -65,6 +65,14 @@ public final class BridgeConfig {
     @SerializedName("relay-deaths")
     public boolean relayDeaths = true;
 
+    /**
+     * Webhook for death cards alone, e.g. a public deaths channel while everything else stays
+     * private. Blank keeps them on {@code webhook-url}; set, they go only here. Like every
+     * outbound post, they stop while {@code webhook-url} is blank.
+     */
+    @SerializedName("deaths-webhook-url")
+    public String deathsWebhookUrl = "";
+
     @SerializedName("relay-advancements")
     public boolean relayAdvancements = true;
 
@@ -225,6 +233,11 @@ public final class BridgeConfig {
         return route("join-leave-webhook-url", joinLeaveWebhookUrl);
     }
 
+    /** Where death cards go: their own webhook if set, otherwise the main one. */
+    public String deathsWebhook() {
+        return route("deaths-webhook-url", deathsWebhookUrl);
+    }
+
     /** Where update cards go: their own webhook if set, otherwise the main one. */
     public String updatesWebhook() {
         return route("updates-webhook-url", updatesWebhookUrl);
@@ -252,6 +265,7 @@ public final class BridgeConfig {
     private void normalise() {
         webhookUrl = clean(webhookUrl);
         joinLeaveWebhookUrl = clean(joinLeaveWebhookUrl);
+        deathsWebhookUrl = clean(deathsWebhookUrl);
         updatesWebhookUrl = clean(updatesWebhookUrl);
         if (badWebhooks == null) {
             badWebhooks = new HashSet<>();
@@ -265,6 +279,7 @@ public final class BridgeConfig {
     private void checkWebhooks() {
         checkWebhook("webhook-url", webhookUrl);
         checkWebhook("join-leave-webhook-url", joinLeaveWebhookUrl);
+        checkWebhook("deaths-webhook-url", deathsWebhookUrl);
         checkWebhook("updates-webhook-url", updatesWebhookUrl);
     }
 
