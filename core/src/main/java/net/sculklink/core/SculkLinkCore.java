@@ -1,5 +1,6 @@
 package net.sculklink.core;
 
+import com.google.gson.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +39,21 @@ public final class SculkLinkCore {
     private final ContentFilter filter;
     /** Discord user id -> timestamps of their recent inbound messages. */
     private final Map<String, Deque<Long>> inboundTimes = new ConcurrentHashMap<>();
+    /** Channel id -> when it last got a leaderboard, so a public channel cannot be flooded with them. */
+    private final Map<String, Long> lastLeaderboard = new ConcurrentHashMap<>();
+
+    /** Seconds between two {@code !deaths} answers in the same channel. */
+    private static final long LEADERBOARD_COOLDOWN_MILLIS = 10_000L;
+    /** How long one read of the stats serves both {@code /deaths} and {@code !deaths}. */
+    private static final long DEATH_STATS_MAX_AGE_MILLIS = 10_000L;
+
+    /**
+     * The last stats read, so a player spamming {@code /deaths} costs one save-and-read every few
+     * seconds rather than one per command. Dropped on every death, so a fresh death always counts.
+     * Main thread only.
+     */
+    private List<DeathStats> deathStatsSnapshot;
+    private long deathStatsReadAt;
 
     private final long startedAt = System.currentTimeMillis();
     /** Set by {@link #serverStopping()}; a shutdown hook running without it means a crash. */
@@ -255,6 +271,7 @@ public final class SculkLinkCore {
     }
 
     public void playerDied(String deathMessage, String name, String uuid) {
+        deathStatsSnapshot = null;
         if (config.relayDeaths) {
             sender.sendDeath(deathMessage, name, uuid);
         }
@@ -273,15 +290,29 @@ public final class SculkLinkCore {
         String content = message.content().strip();
         boolean management = !config.managementChannelId.isBlank()
                 && config.managementChannelId.equals(message.channelId());
+        // The deaths channel is a public wall, not a second chat channel: only the leaderboard is
+        // answered there, and nothing said in it ever reaches the game.
+        boolean deathsChannel = gateway != null && gateway.isDeathsChannel(message.channelId());
 
         if (!config.commandPrefix.isBlank() && content.startsWith(config.commandPrefix)) {
             String body = content.substring(config.commandPrefix.length()).strip();
             String verb = body.split("\\s+", 2)[0].toLowerCase(Locale.ROOT);
             String args = body.contains(" ") ? body.substring(body.indexOf(' ') + 1).strip() : "";
 
+            if (deathsChannel) {
+                if (verb.equals("deaths")) {
+                    postLeaderboard(message);
+                } else if (verb.equals("help") || verb.equals("commands")) {
+                    reply(message, "`" + config.commandPrefix + "deaths` — who has died the most");
+                }
+                return;
+            }
             if (handleCommand(verb, args, message, management)) {
                 return;
             }
+        }
+        if (deathsChannel) {
+            return;
         }
 
         // A DM is a private conversation with the bot, never a chat source. Relaying it would let
@@ -344,6 +375,10 @@ public final class SculkLinkCore {
                 reply(message, "Server has been up for **" + formatUptime() + "**.");
                 return true;
             }
+            case "deaths" -> {
+                postLeaderboard(message);
+                return true;
+            }
             case "tps" -> {
                 platform.runOnMainThread(() -> {
                     double tps = platform.tps();
@@ -397,6 +432,7 @@ public final class SculkLinkCore {
         }
         out.append('`').append(p).append("tps` — server tick rate\n");
         out.append('`').append(p).append("uptime` — how long the server has been up\n");
+        out.append('`').append(p).append("deaths` — who has died the most\n");
 
         if (config.enableLinking) {
             out.append('`').append(p).append("link <code>` — link your Minecraft account "
@@ -491,6 +527,76 @@ public final class SculkLinkCore {
     // ---- Replies -------------------------------------------------------------------------------------
 
     /**
+     * Answers {@code !deaths} with the leaderboard card. Stats are read on the main thread, where
+     * online players' latest numbers can be saved first; the card is posted from the sender.
+     */
+    private void postLeaderboard(DiscordGateway.IncomingMessage message) {
+        long now = System.currentTimeMillis();
+        Long last = lastLeaderboard.get(message.channelId());
+        if (last != null && now - last < LEADERBOARD_COOLDOWN_MILLIS) {
+            return;
+        }
+        lastLeaderboard.put(message.channelId(), now);
+
+        platform.runOnMainThread(() -> {
+            List<DeathStats> stats;
+            try {
+                stats = currentDeathStats();
+            } catch (RuntimeException e) {
+                LOGGER.warn("Could not read death stats", e);
+                reply(message, "Could not read the death stats; the server log says why.");
+                return;
+            }
+            if (stats == null) {
+                reply(message, "This server does not report death stats.");
+                return;
+            }
+            JsonObject embed = DeathLeaderboard.embed(config.serverName, stats);
+            DeathStats leader = DeathLeaderboard.leader(stats);
+
+            boolean management = !config.managementChannelId.isBlank()
+                    && config.managementChannelId.equals(message.channelId());
+            if (gateway != null && (management || message.direct() || !config.outboundEnabled())) {
+                sender.withLeaderThumbnail(embed, leader,
+                        card -> gateway.sendChannelEmbed(message.channelId(), card));
+            } else if (gateway != null && gateway.isDeathsChannel(message.channelId())) {
+                sender.sendLeaderboard(embed, leader, config.deathsWebhook());
+            } else {
+                sender.sendLeaderboard(embed, leader, config.mainWebhook());
+            }
+        });
+    }
+
+    /**
+     * The leaderboard for the in-game {@code /deaths}. Call on the main thread.
+     *
+     * @return chat lines with section-sign colour codes
+     */
+    public List<String> deathLeaderboardLines() {
+        List<DeathStats> stats;
+        try {
+            stats = currentDeathStats();
+        } catch (RuntimeException e) {
+            LOGGER.warn("Could not read death stats", e);
+            return List.of("§cCould not read death stats; see the server log.");
+        }
+        if (stats == null) {
+            return List.of("§cThis server does not report death stats.");
+        }
+        return DeathLeaderboard.chatLines(config.serverName, stats);
+    }
+
+    /** Main thread only. Null if the platform cannot read stats. */
+    private List<DeathStats> currentDeathStats() {
+        long now = System.currentTimeMillis();
+        if (deathStatsSnapshot == null || now - deathStatsReadAt > DEATH_STATS_MAX_AGE_MILLIS) {
+            deathStatsSnapshot = platform.deathStats();
+            deathStatsReadAt = now;
+        }
+        return deathStatsSnapshot;
+    }
+
+    /**
      * Answers in whichever channel the command came from — management replies can contain command
      * output and must not leak into the public chat channel.
      */
@@ -502,8 +608,11 @@ public final class SculkLinkCore {
         // the bot instead. Getting this wrong for a DM would be a leak, not just a nuisance: the
         // answer to a private link attempt would land in the public channel. The bot is also the
         // fallback for chat replies when no webhook is configured — otherwise an inbound-only
-        // setup would accept commands and answer into the void.
-        if (gateway != null && (isManagement || message.direct() || !config.outboundEnabled())) {
+        // setup would accept commands and answer into the void. The deaths channel has its own
+        // webhook, but replies there go through the bot too: the main webhook would answer in
+        // the chat channel instead, which may be private.
+        if (gateway != null && (isManagement || message.direct() || !config.outboundEnabled()
+                || gateway.isDeathsChannel(message.channelId()))) {
             gateway.sendChannelMessage(message.channelId(), text);
         } else {
             sender.sendPlain(text);

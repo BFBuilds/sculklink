@@ -2,6 +2,7 @@ package net.sculklink.neoforge;
 
 import com.mojang.brigadier.CommandDispatcher;
 import net.sculklink.core.BridgePlatform;
+import net.sculklink.core.DeathStats;
 import net.sculklink.core.SculkLinkCore;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementType;
@@ -14,6 +15,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
 import net.minecraft.server.players.UserWhiteListEntry;
+import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -31,8 +33,10 @@ import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -158,6 +162,22 @@ public final class SculkLinkNeoForge implements BridgePlatform {
         }
     }
 
+    /** Saves online players' stats first, as the Fabric module does; see there for why. */
+    @Override
+    public List<DeathStats> deathStats() {
+        MinecraftServer current = this.server;
+        if (current == null) {
+            return null;
+        }
+        Map<String, String> online = new HashMap<>();
+        for (ServerPlayer player : current.getPlayerList().getPlayers()) {
+            player.getStats().save();
+            online.put(player.getUUID().toString(), player.getScoreboardName());
+        }
+        return DeathStats.readAll(current.getWorldPath(LevelResource.PLAYER_STATS_DIR),
+                current.getServerDirectory().resolve("usercache.json"), online);
+    }
+
     @Override
     public double tps() {
         MinecraftServer current = this.server;
@@ -217,10 +237,17 @@ public final class SculkLinkNeoForge implements BridgePlatform {
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public void onDeath(LivingDeathEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
-            // Ask the DamageSource, not the combat tracker — see the Fabric module for why the
-            // tracker returns a bare "<player> died" by the time a death event fires.
-            core.playerDied(event.getSource().getLocalizedDeathMessage(player).getString(),
-                    player.getScoreboardName(), player.getUUID().toString());
+            // NeoForge fires this at the start of die(), just before vanilla reads the combat
+            // tracker for the chat message, so the tracker still holds it. The damage source is
+            // only a fallback: it words some deaths differently from chat ("hit the ground too
+            // hard" where players saw "fell from a high place").
+            String message;
+            try {
+                message = player.getCombatTracker().getDeathMessage().getString();
+            } catch (RuntimeException e) {
+                message = event.getSource().getLocalizedDeathMessage(player).getString();
+            }
+            core.playerDied(message, player.getScoreboardName(), player.getUUID().toString());
         }
     }
 
@@ -276,6 +303,12 @@ public final class SculkLinkNeoForge implements BridgePlatform {
             context.getSource().sendSuccess(() -> Component.literal(invite.isBlank()
                     ? "§cNo Discord invite is configured (set `discord-invite`)."
                     : "§9Join us on Discord: §b" + invite), false);
+            return 1;
+        }));
+
+        dispatcher.register(Commands.literal("deaths").executes(context -> {
+            String board = String.join("\n", core.deathLeaderboardLines());
+            context.getSource().sendSuccess(() -> Component.literal(board), false);
             return 1;
         }));
 

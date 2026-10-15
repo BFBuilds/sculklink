@@ -7,9 +7,9 @@ appear in in-game chat. Server-side only — players need no mods.
 
 | Platform | Jar | Drop it in | Notes |
 |---|---|---|---|
-| Fabric | `sculklink-fabric-1.2.0.jar` | `mods/` | Needs Fabric API |
-| NeoForge | `sculklink-neoforge-1.2.0.jar` | `mods/` | Dedicated servers only |
-| Paper | `sculklink-paper-1.2.0.jar` | `plugins/` | Also Purpur, Pufferfish and other forks |
+| Fabric | `sculklink-fabric-1.3.0.jar` | `mods/` | Needs Fabric API |
+| NeoForge | `sculklink-neoforge-1.3.0.jar` | `mods/` | Dedicated servers only |
+| Paper | `sculklink-paper-1.3.0.jar` | `plugins/` | Also Purpur, Pufferfish and other forks |
 
 Minecraft **26.2+** · Java **25+** · MIT · **no external dependencies**
 
@@ -44,7 +44,7 @@ copy the URL into `webhook-url`. Done.
 2. **Bot → Reset Token** → copy into `bot-token`. Treat it like a password.
 3. **Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT.**
    ← *the step everyone misses.* Without it Discord refuses the connection.
-4. **OAuth2 → URL Generator**: scope `bot`, permissions `View Channel` + `Read Message History`.
+4. **OAuth2 → URL Generator**: scope `bot`, permissions `View Channel`, `Read Message History`, `Send Messages` and `Embed Links` (the bot answers commands itself in DMs, the management channel and the deaths channel).
    Open the URL and invite the bot.
 5. Enable *Settings → Advanced → Developer Mode*, right-click the channel → **Copy Channel ID**
    → `channel-id`.
@@ -69,9 +69,11 @@ the channel doubles as an uptime log.
 | Where | Command | Does |
 |---|---|---|
 | Discord | `!list` `!tps` `!uptime` | Server status |
+| Discord | `!deaths` | Death leaderboard. Also answered in the deaths channel, if it has its own |
 | Discord | `!link <code>` `!unlink` | Account linking |
 | In-game | `/discord` | Your invite link (hidden if `discord-invite` is unset) |
 | In-game | `/link` | Issues a code to redeem in Discord |
+| In-game | `/deaths` | The same leaderboard, in chat |
 
 **Mentions** — typing `@blake` or `@admins` in Minecraft pings that Discord user or role.
 Only names Sculklink has resolved are ever pinged, and `@everyone` stays impossible. Roles work
@@ -109,6 +111,18 @@ are logged with the word that matched, so moderators can see what happened.
 can push into the game. Outbound needs no limit: it already goes through one ordered queue that
 respects Discord's rate limits.
 
+**Death leaderboard** — `!deaths` and `/deaths` rank everyone by deaths, with each player's
+nemesis (the mob that killed them most), who is still clean, and who has gone longest without
+dying. The numbers come from the game's own statistics, so they count every death since the world
+began, not just since Sculklink was installed. When death cards have their own channel
+(`deaths-webhook-url`), `!deaths` works there too, and nothing else said there reaches the game.
+The bot needs View Channel and Send Messages in that channel, and finds it from the webhook at
+start, so restart after moving the webhook. Fabric and NeoForge; Paper says it does not report them yet.
+
+**Bedrock players** joining through Geyser and Floodgate show their real skin. Head services look
+skins up by Java account, which a Bedrock player does not have, so they all came out as Steve;
+Sculklink finds the skin through GeyserMC's global API instead (`bedrock-avatar-url`).
+
 **Crash detection** (`relay-crashes`) — posts 💥 when the JVM exits without a clean shutdown.
 Uses a shutdown hook, so it catches OOM kills too, not just logged exceptions.
 
@@ -126,7 +140,7 @@ Uses a shutdown hook, so it catches OOM kills too, not just logged exceptions.
 | `discord-to-minecraft` | `true` | Master switch for the inbound half. |
 | `relay-chat` | `true` | In-game chat → Discord. |
 | `relay-join-leave` | `true` | |
-| `relay-deaths` | `true` | Uses the game's own wording. |
+| `relay-deaths` | `true` | Uses the exact wording players saw in chat. |
 | `deaths-webhook-url` | `""` | Own webhook for death cards, e.g. a public deaths channel. Blank = `webhook-url`. |
 | `relay-advancements` | `true` | Only ones vanilla announces in chat. |
 | `relay-server-status` | `true` | Online / shutting down. |
@@ -137,6 +151,7 @@ Uses a shutdown hook, so it catches OOM kills too, not just logged exceptions.
 | `relay-mentions` | `true` | `@name` → real Discord ping. |
 | `server-name` | `"Minecraft Server"` | Name on event embeds. |
 | `avatar-url` | mc-heads.net | `{uuid}` and `{name}` are substituted. |
+| `bedrock-avatar-url` | nmsr.nickac.dev | Head for Geyser/Floodgate players; `{texture}` is their skin's texture id. Blank = use `avatar-url` and skip the lookup. |
 | `discord-chat-format` | `§9[Discord] §b{name}§r: {message}` | How Discord looks in-game. |
 | `max-message-length` | `256` | Truncation for inbound messages. |
 | `blocked-words` | `[]` | Blocks matching messages both ways. Empty = off. |

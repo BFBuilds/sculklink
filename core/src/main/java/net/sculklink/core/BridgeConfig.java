@@ -23,7 +23,9 @@ import java.util.Set;
  * the mod gains any newly-added keys (with their defaults) instead of silently ignoring them.
  */
 public final class BridgeConfig {
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting()
+            // Otherwise "=" in a URL is written as \u003d, which reads as a corrupted value.
+            .disableHtmlEscaping().create();
 
     // ---- Discord credentials -------------------------------------------------------------
 
@@ -113,6 +115,15 @@ public final class BridgeConfig {
      */
     @SerializedName("avatar-url")
     public String avatarUrl = "https://mc-heads.net/avatar/{uuid}/64";
+
+    /**
+     * Avatar for Bedrock players who joined through Geyser and Floodgate. Head services look
+     * skins up by Java account, which a Bedrock player does not have, so they all came out as
+     * Steve. Their real skin is found through GeyserMC's global API and {@code {texture}} is
+     * replaced with its Mojang texture id. Blank skips the lookup and uses {@code avatar-url}.
+     */
+    @SerializedName("bedrock-avatar-url")
+    public String bedrockAvatarUrl = "https://nmsr.nickac.dev/face/{texture}?width=64";
 
     /**
      * How a Discord message looks in-game. {@code {name}} is the Discord display name and
@@ -266,6 +277,7 @@ public final class BridgeConfig {
         webhookUrl = clean(webhookUrl);
         joinLeaveWebhookUrl = clean(joinLeaveWebhookUrl);
         deathsWebhookUrl = clean(deathsWebhookUrl);
+        bedrockAvatarUrl = clean(bedrockAvatarUrl);
         updatesWebhookUrl = clean(updatesWebhookUrl);
         if (badWebhooks == null) {
             badWebhooks = new HashSet<>();

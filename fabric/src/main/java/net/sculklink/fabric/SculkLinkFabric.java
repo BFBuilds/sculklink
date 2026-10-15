@@ -1,6 +1,7 @@
 package net.sculklink.fabric;
 
 import net.sculklink.core.BridgePlatform;
+import net.sculklink.core.DeathStats;
 import net.sculklink.core.SculkLinkCore;
 import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -21,6 +22,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
 import net.minecraft.server.players.UserWhiteListEntry;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -185,6 +187,25 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
         return mods;
     }
 
+    /**
+     * Saves online players' stats first: a stats file is otherwise only written on autosave or
+     * logout, and the player who just died is exactly the one {@code !deaths} gets asked about.
+     */
+    @Override
+    public List<DeathStats> deathStats() {
+        MinecraftServer current = this.server;
+        if (current == null) {
+            return null;
+        }
+        Map<String, String> online = new HashMap<>();
+        for (ServerPlayer player : current.getPlayerList().getPlayers()) {
+            player.getStats().save();
+            online.put(player.getUUID().toString(), player.getScoreboardName());
+        }
+        return DeathStats.readAll(current.getWorldPath(LevelResource.PLAYER_STATS_DIR),
+                current.getServerDirectory().resolve("usercache.json"), online);
+    }
+
     @Override
     public double tps() {
         MinecraftServer current = this.server;
@@ -232,12 +253,19 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
 
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, damageSource) -> {
             if (entity instanceof ServerPlayer player) {
-                // Ask the DamageSource, NOT the combat tracker. Vanilla reads the tracker from
-                // inside die(); this event fires at the end of die(), by which point the tracker
-                // has been reset and returns the bare "<player> died" fallback. That produced a
-                // Discord message that disagreed with the one players saw in chat.
-                core.playerDied(damageSource.getLocalizedDeathMessage(player).getString(),
-                        player.getScoreboardName(), player.getUUID().toString());
+                // The chat wording, captured at the start of die() by ServerPlayerMixin. By now
+                // the combat tracker is reset, so the damage source is only the fallback: it
+                // words some deaths differently from what players saw in chat.
+                String message = pendingDeathMessages.remove(player.getUUID());
+                if (message == null) {
+                    if (!deathCaptureMissingLogged) {
+                        deathCaptureMissingLogged = true;
+                        SculkLinkCore.LOGGER.warn("Death cards are using the damage source's wording: the chat "
+                                + "wording was not captured (has ServerPlayer.die changed in this version?)");
+                    }
+                    message = damageSource.getLocalizedDeathMessage(player).getString();
+                }
+                core.playerDied(message, player.getScoreboardName(), player.getUUID().toString());
             }
         });
     }
@@ -260,6 +288,12 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
                 return 1;
             }));
 
+            dispatcher.register(Commands.literal("deaths").executes(context -> {
+                String board = String.join("\n", core.deathLeaderboardLines());
+                context.getSource().sendSuccess(() -> Component.literal(board), false);
+                return 1;
+            }));
+
             dispatcher.register(Commands.literal("link").executes(context -> {
                 ServerPlayer player = context.getSource().getPlayerOrException();
                 if (!core.linkingEnabled()) {
@@ -277,6 +311,30 @@ public final class SculkLinkFabric implements DedicatedServerModInitializer, Bri
                 return 1;
             }));
         });
+    }
+
+    // ---- Called from the death mixin ---------------------------------------------------------------
+
+    /** Chat death messages read at the start of die(), until AFTER_DEATH posts them. Server thread only. */
+    private final Map<UUID, String> pendingDeathMessages = new HashMap<>();
+    private boolean deathMessageFailureLogged;
+    private boolean deathCaptureMissingLogged;
+
+    /**
+     * Reads the death message the way vanilla is about to. Runs inside Minecraft's own death code,
+     * so nothing may escape: on any failure the post falls back to the damage source's wording.
+     */
+    public void rememberDeathMessage(ServerPlayer player) {
+        try {
+            pendingDeathMessages.put(player.getUUID(), player.getCombatTracker().getDeathMessage().getString());
+        } catch (VirtualMachineError e) {
+            throw e;
+        } catch (Throwable t) {
+            if (!deathMessageFailureLogged) {
+                deathMessageFailureLogged = true;
+                SculkLinkCore.LOGGER.warn("Could not read a death message; using the damage source's wording", t);
+            }
+        }
     }
 
     // ---- Called from the advancement mixin ----------------------------------------------------------

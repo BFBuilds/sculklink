@@ -5,7 +5,8 @@
   "mixins": [],
   "client": [],
   "server": [
-    "PlayerAdvancementsMixin"
+    "PlayerAdvancementsMixin",
+    "ServerPlayerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

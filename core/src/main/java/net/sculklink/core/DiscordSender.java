@@ -13,9 +13,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -24,7 +28,9 @@ import java.util.regex.Pattern;
  *
  * <p>Every public method here is called from the server thread, so none of them may block:
  * they hand the message to a single-threaded executor and return immediately. Keeping that
- * executor single-threaded also keeps messages in order, which a pool would not.
+ * executor single-threaded also keeps messages in order, which a pool would not. Posts that
+ * show a player's head are built on that executor too, since a Bedrock player's head needs a
+ * web lookup first.
  */
 public final class DiscordSender {
     /** Discord's own cap on webhook message content. */
@@ -56,6 +62,7 @@ public final class DiscordSender {
     private final BridgeConfig config;
     private final HttpClient http;
     private final ExecutorService queue;
+    private final BedrockSkins bedrockSkins = new BedrockSkins();
     private volatile MentionResolver mentionResolver;
 
     public DiscordSender(BridgeConfig config) {
@@ -83,24 +90,26 @@ public final class DiscordSender {
 
     /** A player's in-game chat, wearing their own name and skin in Discord. */
     public void sendPlayerChat(String playerName, String uuid, String message) {
-        JsonObject payload = base(playerName, avatarFor(playerName, uuid));
+        enqueue(() -> {
+            JsonObject payload = base(playerName, avatarFor(playerName, uuid));
 
-        List<String> users = new ArrayList<>();
-        List<String> roles = new ArrayList<>();
-        payload.addProperty("content", truncate(renderContent(message, users, roles),
-                DISCORD_CONTENT_LIMIT));
+            List<String> users = new ArrayList<>();
+            List<String> roles = new ArrayList<>();
+            payload.addProperty("content", truncate(renderContent(message, users, roles),
+                    DISCORD_CONTENT_LIMIT));
 
-        // Replace the block-everything default with an explicit allow-list. Listing ids is what
-        // makes a ping safe: only names the mod actually resolved can notify anyone, and
-        // @everyone stays impossible because "parse" is still empty.
-        if (!users.isEmpty() || !roles.isEmpty()) {
-            JsonObject allowed = new JsonObject();
-            allowed.add("parse", new JsonArray());
-            allowed.add("users", toJsonArray(users));
-            allowed.add("roles", toJsonArray(roles));
-            payload.add("allowed_mentions", allowed);
-        }
-        enqueue(payload);
+            // Replace the block-everything default with an explicit allow-list. Listing ids is
+            // what makes a ping safe: only names the mod actually resolved can notify anyone,
+            // and @everyone stays impossible because "parse" is still empty.
+            if (!users.isEmpty() || !roles.isEmpty()) {
+                JsonObject allowed = new JsonObject();
+                allowed.add("parse", new JsonArray());
+                allowed.add("users", toJsonArray(users));
+                allowed.add("roles", toJsonArray(roles));
+                payload.add("allowed_mentions", allowed);
+            }
+            return payload;
+        }, config.mainWebhook());
     }
 
     /** A plain line from the mod itself — used for command replies such as {@code !list}. */
@@ -133,6 +142,47 @@ public final class DiscordSender {
         String text = "🏆 **" + escapeMarkdown(playerName) + "** has "
                 + escapeMarkdown(kind) + " **" + escapeMarkdown(title) + "**";
         sendPlayerEmbed(text, COLOR_ADVANCEMENT, playerName, uuid);
+    }
+
+    /**
+     * The {@code !deaths} leaderboard, wearing the leader's head. Goes to whichever channel was
+     * asked: the chat channel's webhook, or the deaths channel's.
+     */
+    public void sendLeaderboard(JsonObject embed, DeathStats leader, String webhook) {
+        enqueue(() -> {
+            JsonObject payload = base(config.serverName, null);
+            JsonObject card = embed.deepCopy();
+            addThumbnail(card, leader);
+            JsonArray embeds = new JsonArray();
+            embeds.add(card);
+            payload.add("embeds", embeds);
+            return payload;
+        }, webhook);
+    }
+
+    /**
+     * Adds the leader's head to an embed the bot will send itself (DM and management replies),
+     * on the sender thread, then hands it on. The bot posts through the gateway, not a webhook.
+     */
+    public void withLeaderThumbnail(JsonObject embed, DeathStats leader, Consumer<JsonObject> then) {
+        try {
+            queue.execute(() -> {
+                JsonObject card = embed.deepCopy();
+                addThumbnail(card, leader);
+                then.accept(card);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // Shutting down; the reply is not worth holding the server open for.
+        }
+    }
+
+    private void addThumbnail(JsonObject embed, DeathStats leader) {
+        String avatar = leader == null ? null : avatarFor(leader.name(), leader.uuid());
+        if (avatar != null) {
+            JsonObject thumbnail = new JsonObject();
+            thumbnail.addProperty("url", avatar);
+            embed.add("thumbnail", thumbnail);
+        }
     }
 
     public void sendServerStarted() {
@@ -270,24 +320,26 @@ public final class DiscordSender {
     }
 
     private void sendPlayerEmbed(String description, int color, String playerName, String uuid, String webhook) {
-        JsonObject payload = base(config.serverName, null);
+        enqueue(() -> {
+            JsonObject payload = base(config.serverName, null);
 
-        JsonObject embed = new JsonObject();
-        embed.addProperty("description", description);
-        embed.addProperty("color", color);
+            JsonObject embed = new JsonObject();
+            embed.addProperty("description", description);
+            embed.addProperty("color", color);
 
-        // Small skin head next to the line — cheap, and makes a busy channel scannable.
-        String avatar = avatarFor(playerName, uuid);
-        if (avatar != null) {
-            JsonObject thumbnail = new JsonObject();
-            thumbnail.addProperty("url", avatar);
-            embed.add("thumbnail", thumbnail);
-        }
+            // Small skin head next to the line — cheap, and makes a busy channel scannable.
+            String avatar = avatarFor(playerName, uuid);
+            if (avatar != null) {
+                JsonObject thumbnail = new JsonObject();
+                thumbnail.addProperty("url", avatar);
+                embed.add("thumbnail", thumbnail);
+            }
 
-        JsonArray embeds = new JsonArray();
-        embeds.add(embed);
-        payload.add("embeds", embeds);
-        enqueue(payload, webhook);
+            JsonArray embeds = new JsonArray();
+            embeds.add(embed);
+            payload.add("embeds", embeds);
+            return payload;
+        }, webhook);
     }
 
     private void sendServerEmbed(String description, int color) {
@@ -325,12 +377,23 @@ public final class DiscordSender {
         return payload;
     }
 
+    /**
+     * The player's head. A Bedrock player's real skin needs a web lookup, so this may block for
+     * a few seconds the first time: call it on the sender thread only.
+     */
     private String avatarFor(String playerName, String uuid) {
+        String name = playerName == null ? "" : playerName;
+        if (!config.bedrockAvatarUrl.isBlank() && BedrockSkins.isFloodgate(uuid)) {
+            String texture = bedrockSkins.textureId(uuid);
+            if (texture != null) {
+                return config.bedrockAvatarUrl.replace("{texture}", texture)
+                        .replace("{uuid}", uuid).replace("{name}", name);
+            }
+        }
         if (config.avatarUrl.isBlank()) {
             return null;
         }
-        return config.avatarUrl.replace("{uuid}", uuid == null ? "" : uuid)
-                .replace("{name}", playerName == null ? "" : playerName);
+        return config.avatarUrl.replace("{uuid}", uuid == null ? "" : uuid).replace("{name}", name);
     }
 
     // ---- Delivery (sender thread) ---------------------------------------------------------
@@ -341,11 +404,28 @@ public final class DiscordSender {
 
     /** Posts to a specific webhook; join/leave, death and update cards may have their own channel. */
     private void enqueue(JsonObject payload, String webhook) {
+        enqueue(() -> payload, webhook);
+    }
+
+    /**
+     * Like {@link #enqueue(JsonObject, String)}, but the payload is built on the sender thread,
+     * in order with everything else. For posts that may wait on a Bedrock skin lookup.
+     */
+    private void enqueue(Supplier<JsonObject> payload, String webhook) {
         if (webhook == null || webhook.isBlank()) {
             return;
         }
         try {
-            queue.execute(() -> post(webhook, payload.toString()));
+            queue.execute(() -> {
+                String body;
+                try {
+                    body = payload.get().toString();
+                } catch (RuntimeException e) {
+                    SculkLinkCore.LOGGER.warn("Could not build a Discord post; it is skipped", e);
+                    return;
+                }
+                post(webhook, body);
+            });
         } catch (java.util.concurrent.RejectedExecutionException e) {
             // Server is already shutting down and the queue is closed. Nothing to do.
         }
@@ -364,7 +444,7 @@ public final class DiscordSender {
                         .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                         .build();
 
-                HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = sendWithDeadline(request);
                 int status = response.statusCode();
 
                 if (status >= 200 && status < 300) {
@@ -407,6 +487,22 @@ public final class DiscordSender {
             }
         }
         SculkLinkCore.LOGGER.warn("Gave up posting to Discord after 3 attempts; that message is lost");
+    }
+
+    /**
+     * Sends with a limit on the whole exchange. The request's own timeout stops counting once the
+     * headers arrive, so a response whose body stalled would otherwise hold the one sender thread,
+     * and every post queued behind it, indefinitely.
+     */
+    private HttpResponse<String> sendWithDeadline(HttpRequest request) throws Exception {
+        CompletableFuture<HttpResponse<String>> call = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        try {
+            return call.get(20, TimeUnit.SECONDS);
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof Exception cause ? cause : e;
+        } finally {
+            call.cancel(true); // no-op once complete; abandons the exchange after a timeout
+        }
     }
 
     private static long retryAfterMillis(String body) {

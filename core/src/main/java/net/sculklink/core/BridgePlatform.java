@@ -76,6 +76,17 @@ public interface BridgePlatform {
         return Map.of();
     }
 
+    /**
+     * Every player's deaths, from the game's own statistics, for {@code !deaths} and
+     * {@code /deaths}. Online players' stats must be saved first so their latest deaths count.
+     * Called on the main thread.
+     *
+     * @return the stats, or {@code null} if this platform cannot read them
+     */
+    default List<DeathStats> deathStats() {
+        return null;
+    }
+
     /** One installed mod or plugin, as an update card shows it. */
     record InstalledMod(String name, String version) {
     }

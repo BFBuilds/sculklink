@@ -108,6 +108,13 @@ public final class DiscordGateway {
     private final Map<String, String> userIds = new ConcurrentHashMap<>();
     private final Map<String, String> roleIds = new ConcurrentHashMap<>();
     private volatile String guildId;
+    /**
+     * The channel death cards go to, when that is not the chat channel. Only {@code !deaths} is
+     * answered there. Learned from the deaths webhook at start, so it cannot drift from it.
+     */
+    private volatile String deathsChannelId;
+    /** Seconds before the next try at finding the deaths channel after a transient failure. */
+    private volatile int deathsChannelRetrySeconds = 30;
 
     // WebSocket.sendText must not be called again until the previous send completes, and we
     // send from two threads (heartbeats and handshakes), so all writes go through one chain.
@@ -133,7 +140,81 @@ public final class DiscordGateway {
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        resolveDeathsChannel();
         connect(GATEWAY_URL);
+    }
+
+    /**
+     * Asks Discord which channel the deaths webhook posts into. A webhook URL carries its own
+     * token, so this needs no bot permission. Skipped when deaths share the chat channel. A
+     * transient failure (network, 429, 5xx) is retried with backoff for as long as the server
+     * runs, so a hiccup at start does not leave {@code !deaths} unanswered there until restart.
+     */
+    private void resolveDeathsChannel() {
+        if (!running.get()) {
+            return;
+        }
+        String webhook = config.deathsWebhook();
+        if (config.deathsWebhookUrl.isBlank() || webhook.isBlank() || webhook.equals(config.mainWebhook())) {
+            return;
+        }
+        HttpRequest request;
+        try {
+            request = HttpRequest.newBuilder()
+                    .uri(URI.create(webhook))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.3.0)")
+                    .GET()
+                    .build();
+        } catch (IllegalArgumentException e) {
+            return; // config loading already reported it, by key, without the token
+        }
+        CompletableFuture<HttpResponse<String>> call = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        // Cancel, not orTimeout: a timeout only completes the future and leaves the exchange open,
+        // so repeated stalls would pile up requests. Cancelling also completes it, into the retry.
+        CompletableFuture.delayedExecutor(30, TimeUnit.SECONDS).execute(() -> call.cancel(true));
+        call.whenComplete((response, error) -> {
+                    int status = response == null ? 0 : response.statusCode();
+                    if (error != null || status == 429 || status >= 500) {
+                        retryDeathsChannel(error != null ? String.valueOf(error.getMessage()) : "HTTP " + status);
+                        return;
+                    }
+                    String channel = "";
+                    if (status == 200) {
+                        try {
+                            channel = optString(JsonParser.parseString(response.body()).getAsJsonObject(), "channel_id");
+                        } catch (RuntimeException ignored) {
+                            // treated as not found below
+                        }
+                    }
+                    if (channel.isBlank()) {
+                        SculkLinkCore.LOGGER.warn("Could not find the deaths webhook's channel (HTTP {}); "
+                                + "{}deaths is answered in the chat channel only", status, config.commandPrefix);
+                    } else if (!channel.equals(config.channelId) && !channel.equals(config.managementChannelId)) {
+                        // The management channel keeps its own handling: marking it deaths-only would
+                        // silently stop console commands there.
+                        deathsChannelId = channel;
+                        SculkLinkCore.LOGGER.info("Death cards have their own channel; {}deaths is answered there "
+                                + "too (the bot needs View Channel and Send Messages in it)", config.commandPrefix);
+                    }
+                });
+    }
+
+    private void retryDeathsChannel(String reason) {
+        int delay = deathsChannelRetrySeconds;
+        deathsChannelRetrySeconds = Math.min(delay * 2, 1800);
+        SculkLinkCore.LOGGER.warn("Could not find the deaths webhook's channel ({}); trying again in {}s", reason, delay);
+        try {
+            scheduler.schedule(this::resolveDeathsChannel, delay, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // stopping
+        }
+    }
+
+    /** True for the separate deaths channel, where only {@code !deaths} is answered. */
+    public boolean isDeathsChannel(String channelId) {
+        String deaths = deathsChannelId;
+        return deaths != null && deaths.equals(channelId);
     }
 
     public void stop() {
@@ -399,7 +480,7 @@ public final class DiscordGateway {
         boolean isChat = config.channelId.equals(channelId);
         boolean isManagement = !config.managementChannelId.isBlank()
                 && config.managementChannelId.equals(channelId);
-        if (!isChat && !isManagement && !direct) {
+        if (!isChat && !isManagement && !direct && !isDeathsChannel(channelId)) {
             return;
         }
 
@@ -418,7 +499,10 @@ public final class DiscordGateway {
             return;
         }
 
-        learnNames(d, author);
+        // The deaths channel only answers !deaths, so it does not teach in-game @mentions either.
+        if (!isDeathsChannel(channelId)) {
+            learnNames(d, author);
+        }
 
         String content = optString(d, "content");
         content = resolveMentions(content, d);
@@ -571,6 +655,43 @@ public final class DiscordGateway {
                     if (response.statusCode() >= 300) {
                         SculkLinkCore.LOGGER.warn("Could not post to channel {} (HTTP {}) — does the "
                                 + "bot have Send Messages there?", channelId, response.statusCode());
+                    }
+                })
+                .exceptionally(error -> {
+                    SculkLinkCore.LOGGER.warn("Could not post to channel {}: {}", channelId, error.getMessage());
+                    return null;
+                });
+    }
+
+    /** Posts an embed to an arbitrary channel as the bot, for replies a webhook cannot reach. */
+    public void sendChannelEmbed(String channelId, JsonObject embed) {
+        if (config.botToken.isBlank() || channelId.isBlank()) {
+            return;
+        }
+        JsonObject allowed = new JsonObject();
+        allowed.add("parse", new JsonArray());
+        JsonArray embeds = new JsonArray();
+        embeds.add(embed);
+
+        JsonObject body = new JsonObject();
+        body.add("embeds", embeds);
+        body.add("allowed_mentions", allowed);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("https://discord.com/api/v10/channels/" + channelId + "/messages"))
+                .timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bot " + config.botToken)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "Sculklink (Minecraft Fabric mod, 1.3.0)")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(),
+                        java.nio.charset.StandardCharsets.UTF_8))
+                .build();
+
+        http.sendAsync(request, HttpResponse.BodyHandlers.discarding())
+                .thenAccept(response -> {
+                    if (response.statusCode() >= 300) {
+                        SculkLinkCore.LOGGER.warn("Could not post to channel {} (HTTP {})",
+                                channelId, response.statusCode());
                     }
                 })
                 .exceptionally(error -> {

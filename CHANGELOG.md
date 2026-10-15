@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0
+
+**Death leaderboard**
+- `!deaths` in Discord and `/deaths` in-game rank everyone by deaths, with each player's nemesis
+  (the mob that killed them most), who is still clean, and who has gone longest without dying
+- Counts come from the game's own statistics, so they include every death since the world began.
+  Online players' stats are saved first, so a death a moment ago already counts
+- When death cards have their own channel, `!deaths` is answered there too. Nothing else said in
+  that channel reaches the game, and one leaderboard per channel per 10 seconds
+- Fabric and NeoForge. Paper replies that it does not report death stats yet
+
+**Bedrock heads**
+- Bedrock players joining through Geyser and Floodgate showed as Steve on every card and chat
+  message. Their real skin is now found through GeyserMC's global API and drawn by
+  `bedrock-avatar-url` (default nmsr.nickac.dev). Lookups are cached and made off the server thread;
+  if one fails, the old avatar is used
+
+**Fixes**
+- Death cards now use the exact wording players saw in chat. Some deaths read differently before,
+  e.g. "hit the ground too hard" where chat said "fell from a high place": Fabric read the message
+  after vanilla had reset the combat tracker, and NeoForge read it from the damage source
+
 ## 1.2.0
 
 - `deaths-webhook-url` sends death cards to their own channel, e.g. a public one while joins,
